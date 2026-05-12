@@ -288,7 +288,7 @@ return{created,updated,conflicts:conflictList};
 // ── Markdown Export ───────────────────────────────────────────────────────────
 function generateChangelogMarkdown(entry){
 if(!entry.editHistory||entry.editHistory.length===0)return"";
-let md="## Edit History\n\n";
+let md="## Lineage\n\n";
 for(const edit of entry.editHistory){
 const date=new Date(edit.timestamp).toLocaleDateString();
 const source=edit.source?.filename||"Unknown source";
@@ -297,7 +297,7 @@ if(Object.keys(edit.changes||{}).length>0){
 for(const[field,change]of Object.entries(edit.changes)){
 if(change.status==="added")md+=`- **${field}**: Added\n`;
 else if(change.status==="appended")md+=`- **${field}**: Updated with new information\n`;
-else if(change.status==="conflict")md+=`- **${field}**: ⚠️ Conflicting information (review needed)\n`;
+else if(change.status==="conflict")md+=`- **${field}**: ⚠️ Reactive marginalia (resolution required)\n`;
 }
 }
 if(edit.conflicts&&edit.conflicts.length>0){
@@ -434,7 +434,7 @@ return(
 <div style={{padding:"20px 40px",borderBottom:"1px solid #3A2A1A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
 <div>
 <div style={{fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:26,color:"#F0E8D8",letterSpacing:"0.02em"}}>The Clarion</div>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.14em",marginTop:2}}>BELLS OF MEMORY · ARCHIVE</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.14em",marginTop:2}}>PELAGIC STACKS · BELLS OF MEMORY</div>
 </div>
 <div style={{display:"flex",alignItems:"center",gap:10}}>
 {apiKey
@@ -466,23 +466,23 @@ style={{padding:"8px 20px",background:testing?"#4A3A2A":"#8B6F5E",border:"none",
 
 {/* Left — Archive Stats */}
 <div style={{paddingRight:40}}>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.14em",marginBottom:20}}>ARCHIVE OVERVIEW</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.14em",marginBottom:20}}>STACKS OVERVIEW</div>
 
 {/* Total + Sources */}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
 <div style={{background:"#2A1A0A",border:"1px solid #3A2A1A",borderRadius:3,padding:"18px 20px"}}>
 <div style={{fontFamily:"'Palatino Linotype',serif",fontSize:42,color:"#C8B89A",lineHeight:1}}>{totalEntries}</div>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.1em",marginTop:6}}>TOTAL ENTRIES</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.1em",marginTop:6}}>FOLIOS PRESSED</div>
 </div>
 <div style={{background:"#2A1A0A",border:"1px solid #3A2A1A",borderRadius:3,padding:"18px 20px"}}>
 <div style={{fontFamily:"'Palatino Linotype',serif",fontSize:42,color:"#C8B89A",lineHeight:1}}>{sources.length}</div>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.1em",marginTop:6}}>SOURCES INGESTED</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.1em",marginTop:6}}>TIDES RECEIVED</div>
 </div>
 </div>
 
 {/* By Category */}
 <div style={{background:"#2A1A0A",border:"1px solid #3A2A1A",borderRadius:3,padding:"18px 20px",marginBottom:24}}>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.12em",marginBottom:14}}>BY CATEGORY</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.12em",marginBottom:14}}>BY COLLECTION</div>
 {catCounts.map(c=>(
 <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:9}}>
 <span style={{color:c.color,fontSize:12,width:16}}>{c.icon}</span>
@@ -498,7 +498,7 @@ style={{padding:"8px 20px",background:testing?"#4A3A2A":"#8B6F5E",border:"none",
 {/* Recent entries */}
 {recentEntries.length>0&&(
 <div style={{background:"#2A1A0A",border:"1px solid #3A2A1A",borderRadius:3,padding:"18px 20px"}}>
-<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.12em",marginBottom:14}}>RECENTLY ADDED</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#5A4A3A",letterSpacing:"0.12em",marginBottom:14}}>RECENTLY SURFACED</div>
 {recentEntries.map(e=>{const c=CATS.find(x=>x.id===e.category);return(
 <div key={e.id} style={{borderBottom:"1px solid #2A1A0A",paddingBottom:10,marginBottom:10}}>
 <div style={{fontSize:13,color:"#E0D0BE",fontFamily:"'Palatino Linotype',serif"}}>{e.title}</div>
@@ -546,7 +546,7 @@ style={{width:"100%",padding:"16px",background:apiKey?"#8B6F5E":"#2A1A0A",border
 
 {/* Footer */}
 <div style={{padding:"14px 40px",borderTop:"1px solid #2A1A0A",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<span style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#3A2A1A"}}>THE CLARION · BELLS OF MEMORY ARCHIVE</span>
+<span style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#3A2A1A"}}>THE CLARION · PELAGIC STACKS</span>
 <span style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#3A2A1A"}}>{new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"})}</span>
 </div>
 </div>
@@ -622,21 +622,21 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 {entry.editHistory&&entry.editHistory.length>0&&(
 <div style={{marginTop:18,borderTop:"1px solid #E8E2DA",paddingTop:14}}>
 <button onClick={()=>setShowHistory(!showHistory)} style={{...BTN({background:"none",border:"none",color:cat?.color,cursor:"pointer",padding:0,fontSize:12,fontFamily:"'Courier New',monospace"})}}>
-{showHistory?"▼":"▶"} Edit History ({entry.editHistory.length})
+{showHistory?"▼":"▶"} Lineage ({entry.editHistory.length})
 </button>
 {showHistory&&<div style={{marginTop:10,fontSize:11,color:"#6B5E52",fontFamily:"Georgia,serif",lineHeight:1.6}}>
 {entry.editHistory.map((edit,idx)=>(
 <div key={idx} style={{marginBottom:10,padding:10,background:"#F0EBE3",borderRadius:2,border:"1px solid #DDD5C8"}}>
 <div style={{fontWeight:600,marginBottom:4}}>{new Date(edit.timestamp).toLocaleDateString()} from {edit.source?.filename}</div>
-{edit.conflicts&&edit.conflicts.length>0&&<div style={{color:"#A06050",fontSize:10,marginBottom:6}}>⚠️ {edit.conflicts.length} conflict(s)</div>}
+{edit.conflicts&&edit.conflicts.length>0&&<div style={{color:"#A06050",fontSize:10,marginBottom:6}}>⚠️ {edit.conflicts.length} marginalia</div>}
 </div>
 ))}
 </div>}
 </div>
 )}
 <div style={{marginTop:24,display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
-<button onClick={handleExport} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Download .md</button>
-{apiKey&&<button onClick={handleExportToBackend} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Export to Entries</button>}
+<button onClick={handleExport} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Draw Folio</button>
+{apiKey&&<button onClick={handleExportToBackend} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Press to Record</button>}
 <button onClick={()=>{if(window.confirm("Delete this entry?"))onDelete(entry.id);}}
 style={{...BTN({border:"1px solid #D9C4B4",background:"none",color:"#A06050"})}}>Delete</button>
 <button onClick={onClose} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Close</button>
@@ -757,7 +757,7 @@ return(
 onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 <div style={{background:"#FDFCFA",width:"min(700px,100%)",maxHeight:"92vh",overflowY:"auto",borderRadius:4,padding:"28px 28px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A"}}>{status==="review"?"Review Entry":"Add to Archive"}</h2>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A"}}>{status==="review"?"Review Folio":"Submit to the Stacks"}</h2>
 <button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#A09080"}}>✕</button>
 </div>
 
@@ -773,7 +773,7 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 <textarea value={raw} onChange={e=>setRaw(e.target.value)}
 placeholder="e.g. Character sketch of a tall woman with silver-streaked hair wearing a burgundy cloak. She holds a bell. Notes around the margin read: 'Keeper of the Third Gate, circa 1340 AD'…"
 style={{...IS,minHeight:160,resize:"vertical"}}/>
-<p style={{fontSize:11,color:"#A09080",fontFamily:"'Courier New',monospace",marginTop:6}}>Type a description of what's in the image, then click Extract Entry.</p>
+<p style={{fontSize:11,color:"#A09080",fontFamily:"'Courier New',monospace",marginTop:6}}>Type a description of what's in the image, then click Surface Entry.</p>
 </>
 ):(
 <>
@@ -789,15 +789,15 @@ style={{...IS,minHeight:150,resize:"vertical"}}/>
 <button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
 <button onClick={handleDetectMultiple} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#7A6A5A":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
-📄 Detect Multiple
+📄 Sound the Depths
 </button>
 <button onClick={handleExtractGlossary} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#6F8B5E":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
-📚 Extract Glossary
+📚 Catalog the Stacks
 </button>
 <button onClick={handleExtract} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
-✦ Extract Entry
+✦ Surface Entry
 </button>
 </div>
 </>}
@@ -861,8 +861,8 @@ style={{...BTN({background:canExtract&&status!=="parsing"?"#2C2218":"#C8C0B8",co
 </div>
 <div style={{display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
 <button onClick={()=>{setStatus("idle");setExtracted(null);setParsed(null);setRaw("");}}
-style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Start Over</button>
-<button onClick={handleSave} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save to Archive</button>
+style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Return to Tide</button>
+<button onClick={handleSave} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Press to Record</button>
 </div>
 </>}
 </div>
@@ -882,8 +882,8 @@ return(
 <div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
 onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 <div style={{background:"#FDFCFA",width:"min(720px,100%)",maxHeight:"92vh",overflowY:"auto",borderRadius:4,padding:"28px 28px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
-<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A",marginBottom:18}}>⚠️ Review Conflicts</h2>
-<p style={{fontSize:13,color:"#6B5E52",marginBottom:16}}>We found {conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)} conflict{conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)!==1?"s":""} while merging entries. Review below:</p>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A",marginBottom:18}}>⚠️ Reactive Marginalia</h2>
+<p style={{fontSize:13,color:"#6B5E52",marginBottom:16}}>We found {conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)} conflict{conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)!==1?"s":""} while tiding entries. Resolve the marginalia below:</p>
 {conflicts.map((item,idx)=>(
 <div key={idx} style={{marginBottom:20,padding:14,background:"#FFF0EE",border:"1px solid #E8C0B8",borderRadius:3}}>
 <div style={{fontSize:13,fontWeight:600,color:"#2C2218",marginBottom:10}}>{item.entry.title}</div>
@@ -895,9 +895,9 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 <div><strong>New:</strong> "{conflict.newValue}"</div>
 </div>
 <div style={{display:"flex",gap:6}}>
-<button onClick={()=>handleResolve(item.entry.id,cIdx,"keep-old")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="keep-old"?"#E8C0B8":"none",color:"#5C4E42"})}}>Keep Old</button>
-<button onClick={()=>handleResolve(item.entry.id,cIdx,"use-new")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="use-new"?"#E8C0B8":"none",color:"#5C4E42"})}}>Use New</button>
-<button onClick={()=>handleResolve(item.entry.id,cIdx,"merge")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="merge"?"#E8C0B8":"none",color:"#5C4E42"})}}>Merge Both</button>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"keep-old")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="keep-old"?"#E8C0B8":"none",color:"#5C4E42"})}}>Keep Prior</button>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"use-new")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="use-new"?"#E8C0B8":"none",color:"#5C4E42"})}}>Surface New</button>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"merge")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="merge"?"#E8C0B8":"none",color:"#5C4E42"})}}>Merge Tides</button>
 </div>
 </div>
 ))}
@@ -905,7 +905,7 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 ))}
 <div style={{marginTop:20,display:"flex",gap:10,justifyContent:"flex-end"}}>
 <button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
-<button onClick={()=>onSave({created,updated,conflicts,resolved})} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save All Entries</button>
+<button onClick={()=>onSave({created,updated,conflicts,resolved})} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Press All to Record</button>
 </div>
 </div>
 </div>
@@ -1046,7 +1046,7 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 <div style={{marginBottom:18}}><label style={LS}>Tags (comma-separated)</label><input value={tags} onChange={e=>setTags(e.target.value)} style={IS} placeholder="e.g. protagonist, magic-user"/></div>
 <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
 <button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
-<button onClick={save} disabled={!title.trim()} style={{...BTN({background:title.trim()?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:title.trim()?"pointer":"not-allowed"})}}>Save to Archive</button>
+<button onClick={save} disabled={!title.trim()} style={{...BTN({background:title.trim()?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:title.trim()?"pointer":"not-allowed"})}}>Press to Record</button>
 </div>
 </div>
 </div>
@@ -1110,7 +1110,7 @@ return(
 <div style={{maxWidth:1100,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,flexWrap:"wrap",gap:8}}>
 <div style={{display:"flex",alignItems:"baseline",gap:10}}>
 <span style={{fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:21,color:"#F0E8D8"}}>The Clarion</span>
-<span style={{fontSize:9,color:"#6A5A4A",fontFamily:"'Courier New',monospace",letterSpacing:"0.08em"}}>BELLS OF MEMORY · ARCHIVE</span>
+<span style={{fontSize:9,color:"#6A5A4A",fontFamily:"'Courier New',monospace",letterSpacing:"0.08em"}}>PELAGIC STACKS · BELLS OF MEMORY</span>
 </div>
 <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
 <input ref={fileRef} type="file" style={{display:"none"}} accept={ALL_EXTS} onChange={e=>{if(e.target.files[0])handleFile(e.target.files[0]);e.target.value="";}}/>
