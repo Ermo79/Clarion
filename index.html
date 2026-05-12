@@ -141,9 +141,31 @@ Shape:
 suggestedCategory must be one of: characters, locations, events, factions, lore, manuscripts, cosmology
 Preserve all proper nouns exactly. Be thorough.`;
 
+const GLOSSARY_SYS=`You are an archivist extracting glossary terms for the novel "Bells of Memory." This is a glossary document. Extract ALL glossary entries and return ONLY valid JSON with this structure:
+{"entries":[{"title":"Term Name","fields":{"Definition":"The definition text","Category":"thematic category if any"},"suggestedCategory":"lore","summary":"1 sentence about this term","tags":["tag1"]}]}
+
+Create one entry per glossary term. Include all terms from the document.`;
+
 const DETECT_SYS=`Analyze this document and identify distinct articles, chapters, or entries that should be separate archive entries. Return ONLY valid JSON:
 {"entryCount":number,"entries":[{"title":"article title","description":"1 sentence summary","startChar":number,"endChar":number,"category":"suggested category"}]}
 Categories: characters, locations, events, factions, lore, manuscripts, cosmology`;
+
+async function extractGlossary(content,apiKey){
+const textContent=content.content||"";
+const messages=[{role:"user",content:`Extract all glossary terms and definitions from this document:\n\n${textContent.slice(0,16000)}`}];
+const allMessages=[{role:"system",content:GLOSSARY_SYS},...messages];
+const res=await fetch(GROQ_URL,{
+method:"POST",
+headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
+body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_tokens:3000}),
+});
+const data=await res.json();
+if(data.error)throw new Error("Glossary extraction failed: "+(data.error.message||JSON.stringify(data.error)));
+const raw=(data.choices?.[0]?.message?.content||"").trim();
+const jsonStr=extractJSON(raw);
+if(!jsonStr)throw new Error("No valid JSON in glossary response");
+try{const result=JSON.parse(jsonStr);return result.entries||[];}catch(e){throw new Error("Invalid JSON in glossary: "+e.message);}
+}
 
 async function extractWithGroq(content,apiKey){
 let messages;
@@ -589,6 +611,27 @@ setStatus("review");
 }catch(e){setErr(e.message||"Unknown error");setStatus("error");}
 };
 
+const handleExtractGlossary=async()=>{
+setStatus("loading");setErr("");
+try{
+const src=parsed||{type:"text",content:raw};
+if(!src.content?.trim()){
+setErr("Please paste glossary content before extracting.");
+setStatus("error");return;
+}
+const entries=await extractGlossary(src,apiKey);
+if(!entries||entries.length===0){setErr("No glossary entries found");setStatus("error");return;}
+const{created,updated,conflicts}=await processMultipleEntries(entries,existingEntries,fileName,apiKey);
+if(conflicts.length>0){
+onMergeConflicts({created,updated,conflicts,entries:[...created,...updated]});
+onClose();
+}else{
+onSaveMultiple([...created,...updated]);
+onClose();
+}
+}catch(e){setErr(e.message||"Glossary extraction failed");setStatus("error");}
+};
+
 const handleSave=()=>{
 onSave({id:Date.now().toString(),category:editedCat,title:extracted.title,summary:extracted.summary,fields:editedFields,tags:extracted.tags||[],sourceFile:fileName||null,createdAt:new Date().toISOString(),editHistory:[],lastModified:new Date().toISOString()});
 onClose();
@@ -635,6 +678,10 @@ style={{...IS,minHeight:150,resize:"vertical"}}/>
 <button onClick={handleDetectMultiple} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#7A6A5A":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
 📄 Detect Multiple
+</button>
+<button onClick={handleExtractGlossary} disabled={!canExtract||status==="parsing"}
+style={{...BTN({background:canExtract&&status!=="parsing"?"#6F8B5E":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
+📚 Extract Glossary
 </button>
 <button onClick={handleExtract} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
