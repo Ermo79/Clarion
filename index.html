@@ -123,10 +123,16 @@ const levenshteinDistance=(a,b)=>{const m=a.length,n=b.length;const d=Array(m+1)
 
 const fuzzyMatch=(str1,str2)=>{const dist=levenshteinDistance(str1.toLowerCase(),str2.toLowerCase());const maxLen=Math.max(str1.length,str2.length);return 1-(dist/maxLen);};
 
+const extractJSON=(text)=>{text=text.trim();let start=-1;let braceCount=0;for(let i=0;i<text.length;i++){if(text[i]==="{"&&start===-1){start=i;}if(start!==-1){if(text[i]==="{")braceCount++;if(text[i]==="}"){braceCount--;if(braceCount===0){return text.slice(start,i+1);}}}}return null;};
+
+const cleanFieldValue=(val)=>{if(typeof val!=="string")return val;return val.trim().replace(/^\s+/gm,"");};
+
+const normalizeEntry=(entry)=>{if(!entry)return entry;const normalized={...entry};if(normalized.fields){for(const key of Object.keys(normalized.fields)){normalized.fields[key]=cleanFieldValue(normalized.fields[key]);}normalized.title=cleanFieldValue(normalized.title||"");normalized.summary=cleanFieldValue(normalized.summary||"");if(normalized.tags){normalized.tags=normalized.tags.map(t=>cleanFieldValue(t));}}return normalized;};
+
 // ── Groq API ──────────────────────────────────────────────────────────────────
 const GROQ_URL="https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL="llama-3.3-70b-versatile";
-const API_BASE_URL=process.env.REACT_APP_API_URL||"http://localhost:3001";
+const API_BASE_URL="http://localhost:3001";
 const SYS=`You are an archivist for the novel "Bells of Memory." Extract structured information and return ONLY a valid JSON object — no explanation, no markdown fences, nothing before or after the JSON.
 
 Shape:
@@ -158,9 +164,9 @@ body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_t
 const data=await res.json();
 if(data.error)throw new Error("Groq: "+(data.error.message||JSON.stringify(data.error)));
 const raw=(data.choices?.[0]?.message?.content||"").trim();
-const m=raw.match(/\{[\s\S]*\}/);
-if(!m)throw new Error("No JSON in response: "+raw.slice(0,200));
-return JSON.parse(m[0]);
+const jsonStr=extractJSON(raw);
+if(!jsonStr)throw new Error("No valid JSON found in response: "+raw.slice(0,200));
+try{const parsed=JSON.parse(jsonStr);return normalizeEntry(parsed);}catch(e){throw new Error("Invalid JSON in response: "+e.message);}
 }
 
 // ── Multi-Entry Detection ──────────────────────────────────────────────────────
@@ -177,10 +183,9 @@ body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_t
 const data=await res.json();
 if(data.error)throw new Error("Detection failed: "+(data.error.message||JSON.stringify(data.error)));
 const raw=(data.choices?.[0]?.message?.content||"").trim();
-const m=raw.match(/\{[\s\S]*\}/);
-if(!m)throw new Error("No JSON in response");
-const detected=JSON.parse(m[0]);
-return detected.entries||[];
+const jsonStr=extractJSON(raw);
+if(!jsonStr)throw new Error("No valid JSON found in detection response");
+try{const detected=JSON.parse(jsonStr);return detected.entries||[];}catch(e){throw new Error("Invalid JSON in detection: "+e.message);}
 }
 
 // ── Deduplication & Merging ────────────────────────────────────────────────────
@@ -229,10 +234,13 @@ return{entry:merged,editEntry,conflicts};
 async function checkComplement(oldVal,newVal,apiKey){
 const prompt=`Are these two descriptions of the same thing complementary (both describing different aspects) or contradictory (conflicting information)?\n\nOLD: "${oldVal}"\n\nNEW: "${newVal}"\n\nRespond with ONLY: "complementary" or "contradictory"`;
 const messages=[{role:"user",content:prompt}];
+try{
 const res=await fetch(GROQ_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0,max_tokens:10})});
 const data=await res.json();
+if(data.error)return{isComplementary:true,analysis:"(defaulted to complementary)"};
 const response=(data.choices?.[0]?.message?.content||"").toLowerCase().trim();
-return{isComplementary:response.includes("complementary"),analysis:response};
+return{isComplementary:!response.includes("contradictory"),analysis:response};
+}catch(e){return{isComplementary:true,analysis:"(defaulted to complementary due to error)"};}
 }
 
 async function processMultipleEntries(newEntries,existingEntries,sourceFile,apiKey){
