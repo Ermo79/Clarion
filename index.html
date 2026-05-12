@@ -173,19 +173,21 @@ try{const parsed=JSON.parse(jsonStr);return normalizeEntry(parsed);}catch(e){thr
 async function detectEntriesInContent(content,apiKey){
 if(content.type==="image") return [{type:"text",content:"Image",startChar:0,endChar:5}];
 const textContent=content.content||"";
-const messages=[{role:"user",content:`Analyze this document and identify distinct articles, chapters, or entries:\n\n${textContent.slice(0,16000)}`}];
-const allMessages=[{role:"system",content:DETECT_SYS},...messages];
+const messages=[{role:"user",content:`You are an expert at identifying separate documents, chapters, or articles within longer texts. Analyze this document carefully and identify each distinct article or entry that should be saved separately.\n\nReturn ONLY a valid JSON object with this exact structure:\n{"entryCount":2,"entries":[{"title":"Article 1","description":"Summary","startChar":0,"endChar":500,"category":"lore"},{"title":"Article 2","description":"Summary","startChar":501,"endChar":1000,"category":"lore"}]}\n\nDocument to analyze:\n\n${textContent.slice(0,14000)}`}];
 const res=await fetch(GROQ_URL,{
 method:"POST",
 headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_tokens:1500}),
+body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0.1,max_tokens:1500}),
 });
 const data=await res.json();
 if(data.error)throw new Error("Detection failed: "+(data.error.message||JSON.stringify(data.error)));
 const raw=(data.choices?.[0]?.message?.content||"").trim();
 const jsonStr=extractJSON(raw);
-if(!jsonStr)throw new Error("No valid JSON found in detection response");
-try{const detected=JSON.parse(jsonStr);return detected.entries||[];}catch(e){throw new Error("Invalid JSON in detection: "+e.message);}
+if(!jsonStr){
+console.error("No JSON in detection response:",raw.slice(0,300));
+throw new Error("Groq did not return structured data. Try 'Extract Entry' instead.");
+}
+try{const detected=JSON.parse(jsonStr);const entries=detected.entries||[];if(!Array.isArray(entries)||entries.length===0)throw new Error("No entries found");return entries;}catch(e){console.error("Detection parse error:",e);throw new Error("Detection failed: "+e.message);}
 }
 
 // ── Deduplication & Merging ────────────────────────────────────────────────────
@@ -540,7 +542,10 @@ setDetectedEntries(detected);
 const selected={};detected.forEach((_,idx)=>{selected[idx]=true;});
 setSelectedEntries(selected);
 setStatus("detect-review");
-}catch(e){setErr(e.message||"Unknown error");setStatus("error");}
+}catch(e){
+setErr(e.message||"Detection failed. Try using 'Extract Entry' instead to process the document as a single entry.");
+setStatus("error");
+}
 };
 
 const handleExtractDetected=async()=>{
