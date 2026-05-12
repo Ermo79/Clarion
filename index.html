@@ -118,9 +118,15 @@ if(ft==="pdf") return parsePdf(f);
 if(ft==="image")return parseImage(f);
 }
 
+// ── Utility Functions ─────────────────────────────────────────────────────────
+const levenshteinDistance=(a,b)=>{const m=a.length,n=b.length;const d=Array(m+1).fill(0).map(()=>Array(n+1).fill(0));for(let i=0;i<=m;i++)d[i][0]=i;for(let j=0;j<=n;j++)d[0][j]=j;for(let i=1;i<=m;i++)for(let j=1;j<=n;j++){const cost=a[i-1]===b[j-1]?0:1;d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+cost);}return d[m][n];};
+
+const fuzzyMatch=(str1,str2)=>{const dist=levenshteinDistance(str1.toLowerCase(),str2.toLowerCase());const maxLen=Math.max(str1.length,str2.length);return 1-(dist/maxLen);};
+
 // ── Groq API ──────────────────────────────────────────────────────────────────
 const GROQ_URL="https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL="llama-3.3-70b-versatile";
+const API_BASE_URL=process.env.REACT_APP_API_URL||"http://localhost:3001";
 const SYS=`You are an archivist for the novel "Bells of Memory." Extract structured information and return ONLY a valid JSON object — no explanation, no markdown fences, nothing before or after the JSON.
 
 Shape:
@@ -128,6 +134,10 @@ Shape:
 
 suggestedCategory must be one of: characters, locations, events, factions, lore, manuscripts, cosmology
 Preserve all proper nouns exactly. Be thorough.`;
+
+const DETECT_SYS=`Analyze this document and identify distinct articles, chapters, or entries that should be separate archive entries. Return ONLY valid JSON:
+{"entryCount":number,"entries":[{"title":"article title","description":"1 sentence summary","startChar":number,"endChar":number,"category":"suggested category"}]}
+Categories: characters, locations, events, factions, lore, manuscripts, cosmology`;
 
 async function extractWithGroq(content,apiKey){
 let messages;
@@ -139,10 +149,11 @@ messages=[{role:"user",content:[
 } else {
 messages=[{role:"user",content:`Extract archive entry from this content:\n\n${String(content.content||"").slice(0,12000)}`}];
 }
+const allMessages=[{role:"system",content:SYS},...messages];
 const res=await fetch(GROQ_URL,{
 method:"POST",
 headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0.1,max_tokens:1200,system:SYS}),
+body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_tokens:1200}),
 });
 const data=await res.json();
 if(data.error)throw new Error("Groq: "+(data.error.message||JSON.stringify(data.error)));
@@ -150,6 +161,167 @@ const raw=(data.choices?.[0]?.message?.content||"").trim();
 const m=raw.match(/\{[\s\S]*\}/);
 if(!m)throw new Error("No JSON in response: "+raw.slice(0,200));
 return JSON.parse(m[0]);
+}
+
+// ── Multi-Entry Detection ──────────────────────────────────────────────────────
+async function detectEntriesInContent(content,apiKey){
+if(content.type==="image") return [{type:"text",content:"Image",startChar:0,endChar:5}];
+const textContent=content.content||"";
+const messages=[{role:"user",content:`Analyze this document and identify distinct articles, chapters, or entries:\n\n${textContent.slice(0,16000)}`}];
+const allMessages=[{role:"system",content:DETECT_SYS},...messages];
+const res=await fetch(GROQ_URL,{
+method:"POST",
+headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
+body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_tokens:1500}),
+});
+const data=await res.json();
+if(data.error)throw new Error("Detection failed: "+(data.error.message||JSON.stringify(data.error)));
+const raw=(data.choices?.[0]?.message?.content||"").trim();
+const m=raw.match(/\{[\s\S]*\}/);
+if(!m)throw new Error("No JSON in response");
+const detected=JSON.parse(m[0]);
+return detected.entries||[];
+}
+
+// ── Deduplication & Merging ────────────────────────────────────────────────────
+function findMatchingEntry(newEntry,existingEntries){
+if(!existingEntries.length)return{match:null,confidence:0};
+let bestMatch=null;let bestScore=0;
+for(const existing of existingEntries){
+const score=fuzzyMatch(newEntry.title,existing.title);
+if(score>0.8&&score>bestScore){bestScore=score;bestMatch=existing;}
+}
+return{match:bestMatch,confidence:bestScore};
+}
+
+async function smartMergeEntries(newEntry,existingEntry,sourceFile,apiKey){
+const timestamp=new Date().toISOString();
+const changes={};const conflicts=[];
+const allFields=new Set([...Object.keys(newEntry.fields||{}),...Object.keys(existingEntry.fields||{})]);
+for(const field of allFields){
+const newVal=newEntry.fields?.[field]||"";const oldVal=existingEntry.fields?.[field]||"";
+if(!newVal&&!oldVal)continue;
+if(!oldVal){changes[field]={old:null,new:newVal,status:"added"};}
+else if(!newVal){changes[field]={old:oldVal,new:null,status:"unchanged"};}
+else if(oldVal===newVal){changes[field]={old:oldVal,new:newVal,status:"unchanged"};}
+else{
+const conflict=await checkComplement(oldVal,newVal,apiKey);
+if(conflict.isComplementary){
+const merged=oldVal+"\n\n"+newVal;
+changes[field]={old:oldVal,new:merged,status:"appended"};
+}else{
+conflicts.push({fieldName:field,oldValue:oldVal,newValue:newVal,recommendation:"review"});
+changes[field]={old:oldVal,new:newVal,status:"conflict"};
+}
+}
+}
+const editEntry={timestamp,source:{filename:sourceFile,uploadDate:new Date().toLocaleDateString()},changes,conflicts};
+const merged={...existingEntry,lastModified:timestamp};
+for(const[field,change]of Object.entries(changes)){
+if(change.status!=="unchanged"&&change.new!==null&&change.new!==""){
+merged.fields[field]=change.new;
+}
+}
+merged.editHistory=merged.editHistory||[];merged.editHistory.push(editEntry);merged.tags=[...new Set([...(merged.tags||[]),...(newEntry.tags||[])])];
+return{entry:merged,editEntry,conflicts};
+}
+
+async function checkComplement(oldVal,newVal,apiKey){
+const prompt=`Are these two descriptions of the same thing complementary (both describing different aspects) or contradictory (conflicting information)?\n\nOLD: "${oldVal}"\n\nNEW: "${newVal}"\n\nRespond with ONLY: "complementary" or "contradictory"`;
+const messages=[{role:"user",content:prompt}];
+const res=await fetch(GROQ_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0,max_tokens:10})});
+const data=await res.json();
+const response=(data.choices?.[0]?.message?.content||"").toLowerCase().trim();
+return{isComplementary:response.includes("complementary"),analysis:response};
+}
+
+async function processMultipleEntries(newEntries,existingEntries,sourceFile,apiKey){
+const created=[],updated=[],conflictList=[];
+for(const newEntry of newEntries){
+const{match,confidence}=findMatchingEntry(newEntry,existingEntries);
+if(match&&confidence>0.8){
+const{entry:merged,conflicts}=await smartMergeEntries(newEntry,match,sourceFile,apiKey);
+updated.push(merged);if(conflicts.length>0)conflictList.push({entry:merged,conflicts});
+}else{
+const newId=Date.now().toString()+Math.random().toString(36).slice(2,9);
+const entry={...newEntry,id:newId,sourceFile,createdAt:new Date().toISOString(),lastModified:new Date().toISOString(),editHistory:[{timestamp:new Date().toISOString(),source:{filename:sourceFile,uploadDate:new Date().toLocaleDateString()},changes:Object.entries(newEntry.fields||{}).reduce((acc,[k,v])=>({...acc,[k]:{old:null,new:v,status:"added"}}),{}),conflicts:[]}]};
+created.push(entry);
+}
+}
+return{created,updated,conflicts:conflictList};
+}
+
+// ── Markdown Export ───────────────────────────────────────────────────────────
+function generateChangelogMarkdown(entry){
+if(!entry.editHistory||entry.editHistory.length===0)return"";
+let md="## Edit History\n\n";
+for(const edit of entry.editHistory){
+const date=new Date(edit.timestamp).toLocaleDateString();
+const source=edit.source?.filename||"Unknown source";
+md+=`### ${date} from ${source}\n`;
+if(Object.keys(edit.changes||{}).length>0){
+for(const[field,change]of Object.entries(edit.changes)){
+if(change.status==="added")md+=`- **${field}**: Added\n`;
+else if(change.status==="appended")md+=`- **${field}**: Updated with new information\n`;
+else if(change.status==="conflict")md+=`- **${field}**: ⚠️ Conflicting information (review needed)\n`;
+}
+}
+if(edit.conflicts&&edit.conflicts.length>0){
+md+="\n**⚠️ Conflicts Found:**\n";
+for(const conflict of edit.conflicts){
+md+=`- ${conflict.fieldName}: "${conflict.oldValue}" vs "${conflict.newValue}"\n`;
+}
+}
+md+="\n";
+}
+return md;
+}
+
+function entryToMarkdown(entry){
+const cat=CATS.find(c=>c.id===entry.category);
+let md=`# ${entry.title}\n\n`;
+md+=`**Category**: ${cat?.label||entry.category}\n`;
+if(entry.tags&&entry.tags.length>0)md+=`**Tags**: ${entry.tags.join(", ")}\n`;
+md+=`**Created**: ${new Date(entry.createdAt).toLocaleDateString()}\n`;
+md+=`**Last Modified**: ${new Date(entry.lastModified||entry.createdAt).toLocaleDateString()}\n`;
+if(entry.sourceFile)md+=`**Source**: ${entry.sourceFile}\n`;
+md+="\n";
+if(entry.summary){md+=`## Summary\n${entry.summary}\n\n`;}
+if(entry.fields&&Object.keys(entry.fields).length>0){
+md+="## Fields\n\n";
+for(const[field,content]of Object.entries(entry.fields)){
+if(content)md+=`### ${field}\n${content}\n\n`;
+}
+}
+const changelog=generateChangelogMarkdown(entry);
+if(changelog)md+=`---\n\n${changelog}`;
+return md;
+}
+
+async function saveEntryToBackend(entry,apiKey){
+try{
+const markdown=entryToMarkdown(entry);
+const res=await fetch(`${API_BASE_URL}/api/entries/save`,{
+method:"POST",headers:{"Content-Type":"application/json","X-API-Key":apiKey},body:JSON.stringify({entry,markdown}),});
+const data=await res.json();
+if(!res.ok)throw new Error(data.error||"Failed to save");
+return{success:true,path:data.path};
+}catch(e){
+throw new Error(`Backend save failed: ${e.message}`);
+}
+}
+
+async function exportEntriesToBackend(entries,apiKey){
+try{
+const exportData=entries.map(entry=>({entry,markdown:entryToMarkdown(entry)}));
+const res=await fetch(`${API_BASE_URL}/api/entries/export`,{
+method:"POST",headers:{"Content-Type":"application/json","X-API-Key":apiKey},body:JSON.stringify({entries:exportData}),});
+const data=await res.json();
+if(!res.ok)throw new Error(data.error||"Export failed");
+return{success:true,count:data.count,files:data.files};
+}catch(e){
+throw new Error(`Backend export failed: ${e.message}`);
+}
 }
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -254,8 +426,30 @@ onMouseLeave={e=>{e.currentTarget.style.background="#FDFCFA";e.currentTarget.sty
 }
 
 // ── Entry Detail ──────────────────────────────────────────────────────────────
-function EntryDetail({entry,onClose,onDelete}){
+function EntryDetail({entry,onClose,onDelete,apiKey}){
 const cat=CATS.find(c=>c.id===entry.category);
+const[showHistory,setShowHistory]=useState(false);
+
+const handleExport=async()=>{
+try{
+const markdown=entryToMarkdown(entry);
+const blob=new Blob([markdown],{type:"text/markdown"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");
+a.href=url;
+a.download=`${entry.title.toLowerCase().replace(/[^a-z0-9]+/g,"-")}.md`;
+a.click();
+URL.revokeObjectURL(url);
+}catch(e){alert("Export failed: "+e.message);}
+};
+
+const handleExportToBackend=async()=>{
+try{
+await saveEntryToBackend(entry,apiKey);
+alert("Entry exported to markdown successfully!");
+}catch(e){alert("Backend export failed: "+e.message);}
+};
+
 return(
 <div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
 onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
@@ -278,7 +472,24 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 </div>
 {entry.tags?.length>0&&<div style={{marginTop:20,display:"flex",gap:6,flexWrap:"wrap"}}>{entry.tags.map(t=><Tag key={t} label={t} color={cat?.color||"#888"}/>)}</div>}
 {entry.sourceFile&&<div style={{marginTop:14,fontSize:11,color:"#B0A090",fontFamily:"'Courier New',monospace"}}>Source: {entry.sourceFile}</div>}
-<div style={{marginTop:24,display:"flex",gap:10,justifyContent:"flex-end"}}>
+{entry.editHistory&&entry.editHistory.length>0&&(
+<div style={{marginTop:18,borderTop:"1px solid #E8E2DA",paddingTop:14}}>
+<button onClick={()=>setShowHistory(!showHistory)} style={{...BTN({background:"none",border:"none",color:cat?.color,cursor:"pointer",padding:0,fontSize:12,fontFamily:"'Courier New',monospace"})}}>
+{showHistory?"▼":"▶"} Edit History ({entry.editHistory.length})
+</button>
+{showHistory&&<div style={{marginTop:10,fontSize:11,color:"#6B5E52",fontFamily:"Georgia,serif",lineHeight:1.6}}>
+{entry.editHistory.map((edit,idx)=>(
+<div key={idx} style={{marginBottom:10,padding:10,background:"#F0EBE3",borderRadius:2,border:"1px solid #DDD5C8"}}>
+<div style={{fontWeight:600,marginBottom:4}}>{new Date(edit.timestamp).toLocaleDateString()} from {edit.source?.filename}</div>
+{edit.conflicts&&edit.conflicts.length>0&&<div style={{color:"#A06050",fontSize:10,marginBottom:6}}>⚠️ {edit.conflicts.length} conflict(s)</div>}
+</div>
+))}
+</div>}
+</div>
+)}
+<div style={{marginTop:24,display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+<button onClick={handleExport} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Download .md</button>
+{apiKey&&<button onClick={handleExportToBackend} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#5E6F8B"})}}>Export to Entries</button>}
 <button onClick={()=>{if(window.confirm("Delete this entry?"))onDelete(entry.id);}}
 style={{...BTN({border:"1px solid #D9C4B4",background:"none",color:"#A06050"})}}>Delete</button>
 <button onClick={onClose} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Close</button>
@@ -289,15 +500,17 @@ style={{...BTN({border:"1px solid #D9C4B4",background:"none",color:"#A06050"})}}
 }
 
 // ── Extract Modal ─────────────────────────────────────────────────────────────
-function ExtractModal({onClose,onSave,apiKey,initialParsed=null,sourceFileName=""}){
+function ExtractModal({onClose,onSave,onSaveMultiple,onMergeConflicts,apiKey,existingEntries=[],initialParsed=null,sourceFileName=""}){
 const [raw,setRaw]=useState(initialParsed?.type==="text"?initialParsed.content:"");
 const [parsed,setParsed]=useState(initialParsed);
 const [fileName,setFileName]=useState(sourceFileName);
 const [ft,setFt]=useState(initialParsed?detectFT(sourceFileName):null);
 const [status,setStatus]=useState(initialParsed?"ready":"idle");
 const [extracted,setExtracted]=useState(null);
+const [detectedEntries,setDetectedEntries]=useState([]);
 const [editedCat,setEditedCat]=useState("");
 const [editedFields,setEditedFields]=useState({});
+const [selectedEntries,setSelectedEntries]=useState({});
 const [err,setErr]=useState("");
 
 const handleFile=async(f)=>{
@@ -306,13 +519,48 @@ try{const p=await parseFile(f);setParsed(p);if(p.type==="text")setRaw(p.content)
 catch(e){setErr("Could not parse file: "+e.message);setStatus("idle");}
 };
 
+const handleDetectMultiple=async()=>{
+setStatus("detecting");setErr("");
+try{
+const src=(parsed?.type==="image")?{type:"text",content:raw}:(parsed||{type:"text",content:raw});
+if(src.type==="text"&&!src.content?.trim()){setErr("Please add content before detecting entries.");setStatus("error");return;}
+const detected=await detectEntriesInContent(src,apiKey);
+setDetectedEntries(detected);
+const selected={};detected.forEach((_,idx)=>{selected[idx]=true;});
+setSelectedEntries(selected);
+setStatus("detect-review");
+}catch(e){setErr(e.message||"Unknown error");setStatus("error");}
+};
+
+const handleExtractDetected=async()=>{
+setStatus("loading");setErr("");
+try{
+const selected=Object.entries(selectedEntries).filter(([_,v])=>v).map(([k])=>parseInt(k));
+if(selected.length===0){setErr("Select at least one entry.");setStatus("detect-review");return;}
+const textContent=parsed?.content||raw;
+const extractedEntries=[];
+for(const idx of selected){
+const entry=detectedEntries[idx];
+const start=entry.startChar;const end=entry.endChar;
+const segment=textContent.slice(start,end);
+const result=await extractWithGroq({type:"text",content:segment},apiKey);
+extractedEntries.push(result);
+}
+const{created,updated,conflicts}=await processMultipleEntries(extractedEntries,existingEntries,fileName,apiKey);
+if(conflicts.length>0){
+onMergeConflicts({created,updated,conflicts,entries:[...created,...updated]});
+onClose();
+}else{
+onSaveMultiple([...created,...updated]);
+onClose();
+}
+}catch(e){setErr(e.message||"Unknown error");setStatus("error");}
+};
+
 const handleExtract=async()=>{
 setStatus("loading");setErr("");
 try{
-// For images, use the typed description as plain text
-const src=(parsed?.type==="image")
-? {type:"text",content:raw}
-: (parsed||{type:"text",content:raw});
+const src=(parsed?.type==="image")?{type:"text",content:raw}:(parsed||{type:"text",content:raw});
 if(src.type==="text"&&!src.content?.trim()){
 setErr("Please describe the image or paste some text before extracting.");
 setStatus("error");return;
@@ -326,7 +574,7 @@ setStatus("review");
 };
 
 const handleSave=()=>{
-onSave({id:Date.now().toString(),category:editedCat,title:extracted.title,summary:extracted.summary,fields:editedFields,tags:extracted.tags||[],sourceFile:fileName||null,createdAt:new Date().toISOString()});
+onSave({id:Date.now().toString(),category:editedCat,title:extracted.title,summary:extracted.summary,fields:editedFields,tags:extracted.tags||[],sourceFile:fileName||null,createdAt:new Date().toISOString(),editHistory:[],lastModified:new Date().toISOString()});
 onClose();
 };
 
@@ -368,12 +616,40 @@ style={{...IS,minHeight:150,resize:"vertical"}}/>
 {err&&<div style={{marginTop:10,padding:"10px 14px",background:"#FFF0EE",border:"1px solid #E8C0B8",borderRadius:2,color:"#B05040",fontSize:12,fontFamily:"'Courier New',monospace",wordBreak:"break-all"}}>{err}</div>}
 <div style={{marginTop:16,display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
 <button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
+<button onClick={handleDetectMultiple} disabled={!canExtract||status==="parsing"}
+style={{...BTN({background:canExtract&&status!=="parsing"?"#7A6A5A":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
+📄 Detect Multiple
+</button>
 <button onClick={handleExtract} disabled={!canExtract||status==="parsing"}
 style={{...BTN({background:canExtract&&status!=="parsing"?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
 ✦ Extract Entry
 </button>
 </div>
 </>}
+
+{status==="detect-review"&&detectedEntries.length>0&&(
+<>
+<p style={{fontSize:13,color:"#7A6A5A",marginBottom:16}}>We found {detectedEntries.length} article{detectedEntries.length!==1?"s":""} in this document. Select which ones to extract:</p>
+<div style={{borderTop:"1px solid #E8E2DA",paddingTop:14,marginBottom:16}}>
+{detectedEntries.map((entry,idx)=>(
+<div key={idx} style={{marginBottom:12,padding:12,background:"#F7F3EE",borderRadius:2,border:"1px solid #E0D8CE"}}>
+<div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+<input type="checkbox" checked={selectedEntries[idx]||false} onChange={e=>setSelectedEntries(p=>({...p,[idx]:e.target.checked}))} style={{marginTop:3,cursor:"pointer"}}/>
+<div style={{flex:1}}>
+<div style={{fontSize:13,fontWeight:600,color:"#2C2218",marginBottom:4}}>{entry.title}</div>
+<div style={{fontSize:11,color:"#6B5E52",lineHeight:1.5}}>{entry.description}</div>
+<div style={{fontSize:10,color:"#A09080",fontFamily:"'Courier New',monospace",marginTop:6}}>{entry.category}</div>
+</div>
+</div>
+</div>
+))}
+</div>
+<div style={{display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+<button onClick={()=>setStatus("idle")} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Back</button>
+<button onClick={handleExtractDetected} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Extract Selected</button>
+</div>
+</>
+)}
 
 {status==="loading"&&(
 <div style={{textAlign:"center",padding:"44px 0"}}>
@@ -414,6 +690,48 @@ style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}
 <button onClick={handleSave} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save to Archive</button>
 </div>
 </>}
+</div>
+</div>
+);
+}
+
+// ── Conflict Review Modal ─────────────────────────────────────────────────────
+function ConflictReviewModal({onClose,onSave,conflicts,created,updated}){
+const[resolved,setResolved]=useState({});
+
+const handleResolve=(entryId,conflictIdx,resolution)=>{
+setResolved(p=>({...p,[`${entryId}-${conflictIdx}`]:resolution}));
+};
+
+return(
+<div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+<div style={{background:"#FDFCFA",width:"min(720px,100%)",maxHeight:"92vh",overflowY:"auto",borderRadius:4,padding:"28px 28px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A",marginBottom:18}}>⚠️ Review Conflicts</h2>
+<p style={{fontSize:13,color:"#6B5E52",marginBottom:16}}>We found {conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)} conflict{conflicts.reduce((acc,c)=>acc+c.conflicts.length,0)!==1?"s":""} while merging entries. Review below:</p>
+{conflicts.map((item,idx)=>(
+<div key={idx} style={{marginBottom:20,padding:14,background:"#FFF0EE",border:"1px solid #E8C0B8",borderRadius:3}}>
+<div style={{fontSize:13,fontWeight:600,color:"#2C2218",marginBottom:10}}>{item.entry.title}</div>
+{item.conflicts.map((conflict,cIdx)=>(
+<div key={cIdx} style={{marginBottom:10,padding:10,background:"#FDFCFA",border:"1px solid #E8C0B8",borderRadius:2}}>
+<div style={{fontSize:11,fontWeight:600,color:"#A06050",marginBottom:6}}>Field: {conflict.fieldName}</div>
+<div style={{fontSize:12,color:"#2C2218",marginBottom:6}}>
+<div style={{marginBottom:4}}><strong>Existing:</strong> "{conflict.oldValue}"</div>
+<div><strong>New:</strong> "{conflict.newValue}"</div>
+</div>
+<div style={{display:"flex",gap:6}}>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"keep-old")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="keep-old"?"#E8C0B8":"none",color:"#5C4E42"})}}>Keep Old</button>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"use-new")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="use-new"?"#E8C0B8":"none",color:"#5C4E42"})}}>Use New</button>
+<button onClick={()=>handleResolve(item.entry.id,cIdx,"merge")} style={{...BTN({fontSize:10,padding:"4px 8px",border:"1px solid #D8C0B8",background:resolved[`${item.entry.id}-${cIdx}`]==="merge"?"#E8C0B8":"none",color:"#5C4E42"})}}>Merge Both</button>
+</div>
+</div>
+))}
+</div>
+))}
+<div style={{marginTop:20,display:"flex",gap:10,justifyContent:"flex-end"}}>
+<button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
+<button onClick={()=>onSave({created,updated,conflicts,resolved})} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save All Entries</button>
+</div>
 </div>
 </div>
 );
@@ -475,15 +793,27 @@ const [search,setSearch]=useState("");
 const [modal,setModal]=useState(null);
 const [payload,setPayload]=useState(null);
 const [selected,setSelected]=useState(null);
+const [conflictData,setConflictData]=useState(null);
 const fileRef=useRef();
 
 const saveKey=k=>{store.set("clarion_groq_key",k);setApiKey(k);};
 const saveEntry=e=>{const u=[e,...entries];setEntries(u);store.set("clarion_entries",u);};
+const saveMultipleEntries=es=>{
+const u=[...es,...entries];setEntries(u);store.set("clarion_entries",u);
+};
 const deleteEntry=id=>{const u=entries.filter(e=>e.id!==id);setEntries(u);store.set("clarion_entries",u);setSelected(null);};
 
 const handleFile=async f=>{
 try{const p=await parseFile(f);setPayload({parsed:p,fileName:f.name});setModal("extract");}
 catch(e){alert(`Could not read "${f.name}":\n${e.message}`);}
+};
+
+const handleMergeConflicts=(data)=>{
+setConflictData(data);setModal("conflicts");
+};
+
+const handleSaveWithConflictResolution=(resolved)=>{
+const{created,updated}=resolved;saveMultipleEntries([...created,...updated]);setModal(null);setConflictData(null);
 };
 
 if(!apiKey) return <SetupScreen onSave={saveKey}/>;
@@ -557,9 +887,10 @@ style={{width:"100%",padding:"9px 12px 9px 30px",border:"1px solid #D8D0C8",bord
 </main>
 </div>
 
-{modal==="extract"&&<ExtractModal onClose={()=>{setModal(null);setPayload(null);}} onSave={saveEntry} apiKey={apiKey} initialParsed={payload?.parsed||null} sourceFileName={payload?.fileName||""}/>}
+{modal==="extract"&&<ExtractModal onClose={()=>{setModal(null);setPayload(null);}} onSave={saveEntry} onSaveMultiple={saveMultipleEntries} onMergeConflicts={handleMergeConflicts} apiKey={apiKey} existingEntries={entries} initialParsed={payload?.parsed||null} sourceFileName={payload?.fileName||""}/>}
 {modal==="manual"&&<ManualModal onClose={()=>setModal(null)} onSave={saveEntry}/>}
-{selected&&<EntryDetail entry={selected} onClose={()=>setSelected(null)} onDelete={deleteEntry}/>}
+{modal==="conflicts"&&conflictData&&<ConflictReviewModal onClose={()=>{setModal(null);setConflictData(null);}} onSave={handleSaveWithConflictResolution} conflicts={conflictData.conflicts} created={conflictData.created} updated={conflictData.updated}/>}
+{selected&&<EntryDetail entry={selected} onClose={()=>setSelected(null)} onDelete={deleteEntry} apiKey={apiKey}/>}
 </div>
 );
 }
