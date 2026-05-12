@@ -802,6 +802,34 @@ onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 );
 }
 
+// ── Settings Modal ────────────────────────────────────────────────────────────
+function SettingsModal({apiKey,onSave,onClose}){
+const [newKey,setNewKey]=useState(apiKey);
+const [saved,setSaved]=useState(false);
+const handleSave=()=>{onSave(newKey);setSaved(true);setTimeout(onClose,1500);};
+return(
+<div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+<div style={{background:"#FDFCFA",width:"min(520px,100%)",borderRadius:4,padding:"32px 36px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A"}}>Settings</h2>
+<button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#A09080"}}>✕</button>
+</div>
+<div style={{marginBottom:20}}>
+<label style={{fontSize:11,textTransform:"uppercase",letterSpacing:"0.1em",color:"#A09080",fontFamily:"'Courier New',monospace",display:"block",marginBottom:8}}>Groq API Key</label>
+<input value={newKey} onChange={e=>setNewKey(e.target.value)} type="password" placeholder="gsk_••••••••••••••••••••••••••••••••••••••••••••••••••" style={{width:"100%",padding:"9px 11px",border:"1px solid #D8D0C8",borderRadius:3,fontSize:13,fontFamily:"monospace",background:"#FDFCFA",color:"#2C2218"}}/>
+<p style={{fontSize:11,color:"#A09080",marginTop:8,fontFamily:"'Courier New',monospace"}}>Get your free key at <a href="https://console.groq.com" target="_blank" style={{color:"#5E6F8B"}}>console.groq.com</a></p>
+</div>
+{saved&&<div style={{padding:"10px 12px",background:"#E8F5E9",border:"1px solid #A8D5A8",borderRadius:2,color:"#2E5C2E",fontSize:12,fontFamily:"'Courier New',monospace",textAlign:"center",marginBottom:16}}>✓ API key updated!</div>}
+<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+<button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
+<button onClick={handleSave} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save API Key</button>
+</div>
+</div>
+</div>
+);
+}
+
 // ── Manual Modal ──────────────────────────────────────────────────────────────
 function ManualModal({onClose,onSave}){
 const [cat,setCat]=useState("characters");
@@ -881,6 +909,9 @@ const handleSaveWithConflictResolution=(resolved)=>{
 const{created,updated}=resolved;saveMultipleEntries([...created,...updated]);setModal(null);setConflictData(null);
 };
 
+const handleOpenSettings=()=>{setModal("settings");};
+const handleSaveSettings=(newKey)=>{saveKey(newKey);};
+
 if(!apiKey) return <SetupScreen onSave={saveKey}/>;
 
 const filtered=entries.filter(e=>{
@@ -906,7 +937,7 @@ return(
 <button onClick={()=>fileRef.current.click()} style={{padding:"5px 12px",background:"none",border:"1px solid #5A4A3A",borderRadius:2,color:"#C8B89A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10}}>↑ Upload</button>
 <button onClick={()=>{setPayload(null);setModal("extract");}} style={{padding:"5px 12px",background:"none",border:"1px solid #5A4A3A",borderRadius:2,color:"#C8B89A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10}}>✦ Extract</button>
 <button onClick={()=>setModal("manual")} style={{padding:"5px 12px",background:"#C8A87A",border:"none",borderRadius:2,color:"#1E140A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10,fontWeight:700}}>+ New</button>
-<button onClick={()=>{if(window.confirm("Change API key?"))setApiKey("");}} style={{padding:"5px 10px",background:"none",border:"1px solid #3A2A1A",borderRadius:2,color:"#6A5A4A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:9}} title="Change API key">⚙</button>
+<button onClick={handleOpenSettings} style={{padding:"5px 10px",background:"none",border:"1px solid #3A2A1A",borderRadius:2,color:"#6A5A4A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:9}} title="Settings">⚙</button>
 </div>
 </div>
 </header>
@@ -955,6 +986,7 @@ style={{width:"100%",padding:"9px 12px 9px 30px",border:"1px solid #D8D0C8",bord
 {modal==="extract"&&<ExtractModal onClose={()=>{setModal(null);setPayload(null);}} onSave={saveEntry} onSaveMultiple={saveMultipleEntries} onMergeConflicts={handleMergeConflicts} apiKey={apiKey} existingEntries={entries} initialParsed={payload?.parsed||null} sourceFileName={payload?.fileName||""}/>}
 {modal==="manual"&&<ManualModal onClose={()=>setModal(null)} onSave={saveEntry}/>}
 {modal==="conflicts"&&conflictData&&<ConflictReviewModal onClose={()=>{setModal(null);setConflictData(null);}} onSave={handleSaveWithConflictResolution} conflicts={conflictData.conflicts} created={conflictData.created} updated={conflictData.updated}/>}
+{modal==="settings"&&<SettingsModal apiKey={apiKey} onSave={handleSaveSettings} onClose={()=>setModal(null)}/>}
 {selected&&<EntryDetail entry={selected} onClose={()=>setSelected(null)} onDelete={deleteEntry} apiKey={apiKey}/>}
 </div>
 );
