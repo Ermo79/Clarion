@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>The Clarion — Bells of Memory</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#F5F0E8;font-family:Georgia,serif;min-height:100vh}
+textarea,input,select{font-family:inherit;outline:none}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:#F0EAE0}
+::-webkit-scrollbar-thumb{background:#C8B89A;border-radius:3px}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useRef,useCallback}=React;
+
+// ── Categories ────────────────────────────────────────────────────────────────
+const CATS=[
+{id:"characters", label:"Characters", icon:"◈",color:"#8B6F5E"},
+{id:"locations", label:"Locations", icon:"◎",color:"#5E7A6F"},
+{id:"events", label:"Events", icon:"◇",color:"#6F6B8B"},
+{id:"factions", label:"Factions", icon:"◉",color:"#8B7A5E"},
+{id:"lore", label:"Lore & Magic", icon:"✦",color:"#5E6F8B"},
+{id:"manuscripts",label:"Manuscripts", icon:"☰",color:"#7A5E8B"},
+{id:"cosmology", label:"Cosmology & Taxonomy",icon:"⊕",color:"#6F8B5E"},
+];
+const CAT_FIELDS={
+characters: ["Full Name","Aliases","Role","Affiliation","Physical Description","Personality","Background","Abilities","Relationships","Arc Notes"],
+locations: ["Name","Region","Type","Description","Significance","Inhabitants","Connected Locations","Historical Notes"],
+events: ["Name","Date/Era","Location","Participants","Summary","Causes","Consequences","Related Entries"],
+factions: ["Name","Type","Leader","Goals","Methods","Members","Rivals","History","Symbols"],
+lore: ["Term","Category","Origin","Description","Rules/Limitations","Known Practitioners","Related Lore"],
+manuscripts:["Title","Author","Era","Type","Synopsis","Significance","Key Passages","Provenance"],
+cosmology: ["Term","Domain","Classification","Description","Hierarchy","Relations","Examples"],
+};
+const FILE_TYPES={
+text: {exts:[".txt",".md",".rtf",".csv",".tsv"],label:"Text", icon:"☰",color:"#5E7A6F"},
+docx: {exts:[".docx"], label:"Word Doc", icon:"W",color:"#2B5797"},
+xlsx: {exts:[".xlsx",".xls",".ods"], label:"Spreadsheet",icon:"⊞",color:"#1D6F42"},
+image:{exts:[".jpg",".jpeg",".png",".gif",".webp",".bmp",".tiff"],label:"Image",icon:"◧",color:"#8B5E3C"},
+pdf: {exts:[".pdf"], label:"PDF", icon:"P",color:"#B7001E"},
+};
+const ALL_EXTS=Object.values(FILE_TYPES).flatMap(d=>d.exts).join(",");
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+const store={
+get:(k)=>{try{return JSON.parse(localStorage.getItem(k))}catch{return null}},
+set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
+};
+
+// ── File helpers ──────────────────────────────────────────────────────────────
+function detectFT(name){
+const l=(name||"").toLowerCase();
+for(const[k,d]of Object.entries(FILE_TYPES))if(d.exts.some(e=>l.endsWith(e)))return k;
+return null;
+}
+async function parseText(f){return{type:"text",content:(await f.text()).slice(0,16000)};}
+async function parseDocx(f){
+const ab=await f.arrayBuffer();
+const r=await mammoth.extractRawText({arrayBuffer:ab});
+return{type:"text",content:(r.value||"").slice(0,16000)};
+}
+async function parseXlsx(f){
+const ab=await f.arrayBuffer();
+const wb=XLSX.read(ab,{type:"array"});
+const parts=wb.SheetNames.map(n=>{const csv=XLSX.utils.sheet_to_csv(wb.Sheets[n]);return csv.trim()?`## ${n}\n${csv}`:null}).filter(Boolean);
+return{type:"text",content:parts.join("\n\n").slice(0,16000)};
+}
+async function parsePdf(f){
+return new Promise((res,rej)=>{
+const r=new FileReader();
+r.onload=async()=>{
+try{
+const lib=window["pdfjs-dist/build/pdf"];
+if(!lib)throw new Error("pdf.js not ready, try again in a moment");
+lib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const pdf=await lib.getDocument({data:new Uint8Array(r.result)}).promise;
+const pages=[];
+for(let i=1;i<=Math.min(pdf.numPages,30);i++){
+const pg=await pdf.getPage(i);
+const tc=await pg.getTextContent();
+pages.push(tc.items.map(s=>s.str).join(" "));
+}
+res({type:"text",content:pages.join("\n\n").slice(0,16000)});
+}catch(e){rej(new Error("PDF failed: "+e.message));}
+};
+r.onerror=rej;
+r.readAsArrayBuffer(f);
+});
+}
+async function parseImage(f){
+return new Promise((res,rej)=>{
+const r=new FileReader();
+r.onload=()=>res({type:"image",base64:r.result.split(",")[1],mediaType:f.type||"image/jpeg"});
+r.onerror=rej;
+r.readAsDataURL(f);
+});
+}
+async function parseFile(f){
+const ft=detectFT(f.name);
+if(!ft)throw new Error(`Unsupported format: "${f.name}"`);
+if(ft==="text") return parseText(f);
+if(ft==="docx") return parseDocx(f);
+if(ft==="xlsx") return parseXlsx(f);
+if(ft==="pdf") return parsePdf(f);
+if(ft==="image")return parseImage(f);
+}
+
+// ── Groq API ──────────────────────────────────────────────────────────────────
+const GROQ_URL="https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODEL="llama-3.3-70b-versatile";
+const SYS=`You are an archivist for the novel "Bells of Memory." Extract structured information and return ONLY a valid JSON object — no explanation, no markdown fences, nothing before or after the JSON.
+
+Shape:
+{"suggestedCategory":"characters","title":"Name","fields":{"Field":"value"},"summary":"1-2 sentence wiki summary.","tags":["tag1","tag2"]}
+
+suggestedCategory must be one of: characters, locations, events, factions, lore, manuscripts, cosmology
+Preserve all proper nouns exactly. Be thorough.`;
+
+async function extractWithGroq(content,apiKey){
+let messages;
+if(content.type==="image"){
+messages=[{role:"user",content:[
+{type:"image_url",image_url:{url:`data:${content.mediaType};base64,${content.base64}`}},
+{type:"text",text:"Extract all world-building, character, location, lore or narrative information from this image for the Bells of Memory archive. Return ONLY the JSON object."}
+]}];
+} else {
+messages=[{role:"user",content:`Extract archive entry from this content:\n\n${String(content.content||"").slice(0,12000)}`}];
+}
+const res=await fetch(GROQ_URL,{
+method:"POST",
+headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
+body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0.1,max_tokens:1200,system:SYS}),
+});
+const data=await res.json();
+if(data.error)throw new Error("Groq: "+(data.error.message||JSON.stringify(data.error)));
+const raw=(data.choices?.[0]?.message?.content||"").trim();
+const m=raw.match(/\{[\s\S]*\}/);
+if(!m)throw new Error("No JSON in response: "+raw.slice(0,200));
+return JSON.parse(m[0]);
+}
+
+// ── Shared styles ─────────────────────────────────────────────────────────────
+const IS={width:"100%",padding:"9px 11px",border:"1px solid #D8D0C8",borderRadius:3,fontSize:13,fontFamily:"Georgia,serif",background:"#FDFCFA",color:"#2C2218",boxSizing:"border-box"};
+const LS={fontSize:10,textTransform:"uppercase",letterSpacing:"0.1em",color:"#A09080",fontFamily:"'Courier New',monospace",display:"block",marginBottom:5};
+const BTN=(extra={})=>({padding:"8px 20px",border:"none",borderRadius:3,cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:12,letterSpacing:"0.04em",...extra});
+
+// ── Small components ──────────────────────────────────────────────────────────
+function Tag({label,color}){
+return <span style={{display:"inline-block",padding:"2px 8px",borderRadius:2,fontSize:11,fontFamily:"'Courier New',monospace",background:color+"18",color,border:`1px solid ${color}44`}}>{label}</span>;
+}
+function Badge({ft}){
+if(!ft)return null;
+const d=FILE_TYPES[ft];
+return <span style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 10px",borderRadius:2,fontSize:11,background:d.color+"15",color:d.color,border:`1px solid ${d.color}44`,fontFamily:"'Courier New',monospace"}}>{d.icon} {d.label} detected</span>;
+}
+function UploadZone({onFile,compact}){
+const [drag,setDrag]=useState(false);
+const ref=useRef();
+return(
+<div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)}
+onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer?.files[0];if(f)onFile(f);}}
+onClick={()=>ref.current.click()}
+style={{border:`2px dashed ${drag?"#8B6F5E":"#C8C0B4"}`,borderRadius:3,padding:compact?"14px":"24px 16px",textAlign:"center",cursor:"pointer",background:drag?"#F5EDE4":"#FDFCFA",transition:"all .15s"}}>
+<input ref={ref} type="file" style={{display:"none"}} accept={ALL_EXTS} onChange={e=>{if(e.target.files[0])onFile(e.target.files[0]);e.target.value="";}}/>
+<div style={{fontSize:compact?18:26,color:"#C8B89A",marginBottom:5}}>↑</div>
+<div style={{fontFamily:"'Palatino Linotype',serif",fontSize:compact?13:15,color:"#5C4E42",marginBottom:4}}>{compact?"Drop a file or click":"Drop any file here, or click to browse"}</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:9,color:"#A09080",lineHeight:1.9}}>.docx · .xlsx · .pdf · .txt · .md · .csv<br/>.jpg · .png · .gif · .webp</div>
+</div>
+);
+}
+
+// ── API Key Setup Screen ──────────────────────────────────────────────────────
+function SetupScreen({onSave}){
+const [key,setKey]=useState("");
+const [err,setErr]=useState("");
+const [testing,setTesting]=useState(false);
+const test=async()=>{
+if(!key.trim()){setErr("Please paste your Groq API key first.");return;}
+setTesting(true);setErr("");
+try{
+const res=await fetch(GROQ_URL,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${key.trim()}`},
+body:JSON.stringify({model:GROQ_MODEL,messages:[{role:"user",content:"Say OK"}],max_tokens:5})});
+const d=await res.json();
+if(d.error)throw new Error(d.error.message);
+onSave(key.trim());
+}catch(e){setErr("Key test failed: "+e.message);}
+setTesting(false);
+};
+return(
+<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#F5F0E8",padding:24}}>
+<div style={{maxWidth:520,width:"100%",background:"#FDFCFA",border:"1px solid #E0D8CE",borderRadius:4,padding:"40px 36px",boxShadow:"0 4px 24px rgba(0,0,0,0.08)"}}>
+<div style={{textAlign:"center",marginBottom:32}}>
+<div style={{fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:32,color:"#1E140A",marginBottom:6}}>The Clarion</div>
+<div style={{fontFamily:"'Courier New',monospace",fontSize:10,color:"#A09080",letterSpacing:"0.12em"}}>BELLS OF MEMORY · ARCHIVE</div>
+</div>
+<p style={{fontSize:14,color:"#5C4E42",lineHeight:1.7,marginBottom:24}}>
+The Clarion uses <strong>Groq</strong> — a free AI service — to extract and structure your notes.
+It takes about 2 minutes to get a free API key.
+</p>
+<div style={{background:"#F0EBE3",border:"1px solid #DDD5C8",borderRadius:3,padding:"16px 18px",marginBottom:24,fontSize:13,color:"#4A3C2E",lineHeight:1.8}}>
+<strong style={{fontFamily:"'Courier New',monospace",fontSize:11,letterSpacing:"0.06em"}}>HOW TO GET YOUR FREE KEY:</strong><br/>
+1. Go to <a href="https://console.groq.com" target="_blank" style={{color:"#5E6F8B"}}>console.groq.com</a><br/>
+2. Sign up for a free account (no credit card)<br/>
+3. Click <strong>API Keys</strong> → <strong>Create API Key</strong><br/>
+4. Copy it and paste it below
+</div>
+<label style={LS}>Your Groq API Key</label>
+<input value={key} onChange={e=>setKey(e.target.value)}
+placeholder="gsk_••••••••••••••••••••••••••••••••••••••••••••••••••"
+type="password" style={{...IS,marginBottom:12,fontFamily:"monospace"}}/>
+{err&&<div style={{color:"#B05040",fontSize:12,fontFamily:"'Courier New',monospace",marginBottom:12,padding:"8px 12px",background:"#FFF0EE",borderRadius:2,border:"1px solid #E8C0B8"}}>{err}</div>}
+<button onClick={test} disabled={testing}
+style={{...BTN({width:"100%",background:testing?"#C8C0B8":"#2C2218",color:"#F5F0E8",padding:"11px",fontSize:13})}}>
+{testing?"Testing connection…":"Connect & Enter The Clarion"}
+</button>
+<p style={{marginTop:14,fontSize:11,color:"#A09080",textAlign:"center",fontStyle:"italic"}}>
+Your key is saved locally in this browser. It never leaves your device.
+</p>
+</div>
+</div>
+);
+}
+
+// ── Entry Card ────────────────────────────────────────────────────────────────
+function EntryCard({entry,onClick}){
+const cat=CATS.find(c=>c.id===entry.category);
+return(
+<div onClick={()=>onClick(entry)}
+style={{border:"1px solid #E8E2DA",borderLeft:`3px solid ${cat?.color||"#ccc"}`,padding:"14px 16px",cursor:"pointer",background:"#FDFCFA",transition:"all .15s",marginBottom:8,borderRadius:2,animation:"fadein .2s ease"}}
+onMouseEnter={e=>{e.currentTarget.style.background="#F7F3EE";e.currentTarget.style.borderLeftWidth="5px";}}
+onMouseLeave={e=>{e.currentTarget.style.background="#FDFCFA";e.currentTarget.style.borderLeftWidth="3px";}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:4}}>
+<span style={{fontFamily:"'Palatino Linotype',Palatino,serif",fontWeight:600,fontSize:15,color:"#2C2218"}}>{entry.title}</span>
+<span style={{fontSize:10,color:cat?.color,fontFamily:"'Courier New',monospace",letterSpacing:"0.08em",textTransform:"uppercase"}}>{cat?.icon} {cat?.label}</span>
+</div>
+{entry.summary&&<p style={{margin:"6px 0 8px",fontSize:13,color:"#6B5E52",lineHeight:1.5}}>{entry.summary}</p>}
+<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{entry.tags?.map(t=><Tag key={t} label={t} color={cat?.color||"#888"}/>)}</div>
+{entry.sourceFile&&<div style={{marginTop:5,fontSize:10,color:"#B0A090",fontFamily:"'Courier New',monospace"}}>source: {entry.sourceFile}</div>}
+</div>
+);
+}
+
+// ── Entry Detail ──────────────────────────────────────────────────────────────
+function EntryDetail({entry,onClose,onDelete}){
+const cat=CATS.find(c=>c.id===entry.category);
+return(
+<div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+<div style={{background:"#FDFCFA",width:"min(680px,100%)",maxHeight:"88vh",overflowY:"auto",borderRadius:4,padding:"32px 36px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+<div>
+<div style={{fontSize:11,color:cat?.color,fontFamily:"'Courier New',monospace",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:4}}>{cat?.icon} {cat?.label}</div>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:26,color:"#1E140A",fontWeight:600}}>{entry.title}</h2>
+</div>
+<button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#A09080"}}>✕</button>
+</div>
+{entry.summary&&<p style={{fontFamily:"Georgia,serif",fontStyle:"italic",color:"#5C4E42",borderLeft:`2px solid ${cat?.color}`,paddingLeft:14,marginBottom:24,lineHeight:1.7}}>{entry.summary}</p>}
+<div style={{display:"grid",gap:12}}>
+{Object.entries(entry.fields||{}).map(([k,v])=>v&&(
+<div key={k} style={{borderBottom:"1px solid #EDE8E0",paddingBottom:10}}>
+<div style={{fontSize:10,textTransform:"uppercase",letterSpacing:"0.1em",color:"#A09080",fontFamily:"'Courier New',monospace",marginBottom:3}}>{k}</div>
+<div style={{fontSize:14,color:"#2C2218",fontFamily:"Georgia,serif",lineHeight:1.65,whiteSpace:"pre-wrap"}}>{v}</div>
+</div>
+))}
+</div>
+{entry.tags?.length>0&&<div style={{marginTop:20,display:"flex",gap:6,flexWrap:"wrap"}}>{entry.tags.map(t=><Tag key={t} label={t} color={cat?.color||"#888"}/>)}</div>}
+{entry.sourceFile&&<div style={{marginTop:14,fontSize:11,color:"#B0A090",fontFamily:"'Courier New',monospace"}}>Source: {entry.sourceFile}</div>}
+<div style={{marginTop:24,display:"flex",gap:10,justifyContent:"flex-end"}}>
+<button onClick={()=>{if(window.confirm("Delete this entry?"))onDelete(entry.id);}}
+style={{...BTN({border:"1px solid #D9C4B4",background:"none",color:"#A06050"})}}>Delete</button>
+<button onClick={onClose} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Close</button>
+</div>
+</div>
+</div>
+);
+}
+
+// ── Extract Modal ─────────────────────────────────────────────────────────────
+function ExtractModal({onClose,onSave,apiKey,initialParsed=null,sourceFileName=""}){
+const [raw,setRaw]=useState(initialParsed?.type==="text"?initialParsed.content:"");
+const [parsed,setParsed]=useState(initialParsed);
+const [fileName,setFileName]=useState(sourceFileName);
+const [ft,setFt]=useState(initialParsed?detectFT(sourceFileName):null);
+const [status,setStatus]=useState(initialParsed?"ready":"idle");
+const [extracted,setExtracted]=useState(null);
+const [editedCat,setEditedCat]=useState("");
+const [editedFields,setEditedFields]=useState({});
+const [err,setErr]=useState("");
+
+const handleFile=async(f)=>{
+setErr("");setStatus("parsing");setFileName(f.name);setFt(detectFT(f.name));
+try{const p=await parseFile(f);setParsed(p);if(p.type==="text")setRaw(p.content);else setRaw("");setStatus("ready");}
+catch(e){setErr("Could not parse file: "+e.message);setStatus("idle");}
+};
+
+const handleExtract=async()=>{
+setStatus("loading");setErr("");
+try{
+// For images, use the typed description as plain text
+const src=(parsed?.type==="image")
+? {type:"text",content:raw}
+: (parsed||{type:"text",content:raw});
+if(src.type==="text"&&!src.content?.trim()){
+setErr("Please describe the image or paste some text before extracting.");
+setStatus("error");return;
+}
+const result=await extractWithGroq(src,apiKey);
+setExtracted(result);
+setEditedCat(result.suggestedCategory||"characters");
+setEditedFields(result.fields||{});
+setStatus("review");
+}catch(e){setErr(e.message||"Unknown error");setStatus("error");}
+};
+
+const handleSave=()=>{
+onSave({id:Date.now().toString(),category:editedCat,title:extracted.title,summary:extracted.summary,fields:editedFields,tags:extracted.tags||[],sourceFile:fileName||null,createdAt:new Date().toISOString()});
+onClose();
+};
+
+const canExtract=(parsed?.type==="image"?raw.trim().length>10:null)||parsed||raw.trim().length>10;
+const showInput=["idle","ready","error","parsing"].includes(status);
+
+return(
+<div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+<div style={{background:"#FDFCFA",width:"min(700px,100%)",maxHeight:"92vh",overflowY:"auto",borderRadius:4,padding:"28px 28px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A"}}>{status==="review"?"Review Entry":"Add to Archive"}</h2>
+<button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#A09080"}}>✕</button>
+</div>
+
+{showInput&&<>
+{ft&&<div style={{marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}><Badge ft={ft}/><span style={{fontSize:11,color:"#8A7A6A",fontFamily:"'Courier New',monospace",wordBreak:"break-all"}}>{fileName}</span></div>}
+<UploadZone onFile={handleFile}/>
+{parsed?.type==="image"?(
+<>
+<div style={{padding:"12px 14px",background:"#F0EBE3",borderRadius:3,border:"1px solid #DDD5C8",fontSize:13,color:"#5C4E42",lineHeight:1.6,marginBottom:10}}>
+🖼 <strong>{fileName}</strong> loaded.
+</div>
+<label style={{...LS,marginBottom:6}}>Describe this image for the archive</label>
+<textarea value={raw} onChange={e=>setRaw(e.target.value)}
+placeholder="e.g. Character sketch of a tall woman with silver-streaked hair wearing a burgundy cloak. She holds a bell. Notes around the margin read: 'Keeper of the Third Gate, circa 1340 AD'…"
+style={{...IS,minHeight:160,resize:"vertical"}}/>
+<p style={{fontSize:11,color:"#A09080",fontFamily:"'Courier New',monospace",marginTop:6}}>Type a description of what's in the image, then click Extract Entry.</p>
+</>
+):(
+<>
+<div style={{textAlign:"center",fontSize:11,color:"#B0A090",fontFamily:"'Courier New',monospace",margin:"12px 0 8px"}}>— or paste / type text below —</div>
+<textarea value={raw} onChange={e=>{setRaw(e.target.value);if(e.target.value)setParsed(null);}}
+placeholder="Paste notes, manuscript excerpts, character sketches, lore, spreadsheet data, or a Google Docs export…"
+style={{...IS,minHeight:150,resize:"vertical"}}/>
+</>
+)}
+{status==="parsing"&&<p style={{textAlign:"center",color:"#8A7A6A",fontStyle:"italic",marginTop:10,fontSize:13}}>Parsing file…</p>}
+{err&&<div style={{marginTop:10,padding:"10px 14px",background:"#FFF0EE",border:"1px solid #E8C0B8",borderRadius:2,color:"#B05040",fontSize:12,fontFamily:"'Courier New',monospace",wordBreak:"break-all"}}>{err}</div>}
+<div style={{marginTop:16,display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+<button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
+<button onClick={handleExtract} disabled={!canExtract||status==="parsing"}
+style={{...BTN({background:canExtract&&status!=="parsing"?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:canExtract&&status!=="parsing"?"pointer":"not-allowed"})}}>
+✦ Extract Entry
+</button>
+</div>
+</>}
+
+{status==="loading"&&(
+<div style={{textAlign:"center",padding:"44px 0"}}>
+<div style={{fontSize:34,display:"inline-block",animation:"spin 2s linear infinite",marginBottom:14}}>✦</div>
+<p style={{color:"#7A6A5A",fontFamily:"Georgia,serif",fontStyle:"italic",fontSize:15}}>The Clarion is reading your content…</p>
+<p style={{color:"#A09080",fontSize:12,marginTop:8,fontFamily:"'Courier New',monospace"}}>Powered by Groq · usually takes 2–5 seconds</p>
+</div>
+)}
+
+{status==="review"&&extracted&&<>
+<p style={{fontSize:13,color:"#7A6A5A",marginBottom:18,fontStyle:"italic"}}>Review and edit before saving to the archive.</p>
+<div style={{marginBottom:14}}><label style={LS}>Category</label>
+<select value={editedCat} onChange={e=>setEditedCat(e.target.value)} style={{...IS,width:"auto"}}>
+{CATS.map(c=><option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+</select>
+</div>
+<div style={{marginBottom:14}}><label style={LS}>Title</label>
+<input value={extracted.title||""} onChange={e=>setExtracted(p=>({...p,title:e.target.value}))} style={IS}/>
+</div>
+<div style={{marginBottom:14}}><label style={LS}>Summary</label>
+<textarea value={extracted.summary||""} onChange={e=>setExtracted(p=>({...p,summary:e.target.value}))} style={{...IS,minHeight:72,resize:"vertical"}}/>
+</div>
+<div style={{borderTop:"1px solid #E8E2DA",paddingTop:14,marginBottom:14}}>
+<div style={{...LS,marginBottom:12}}>Extracted Fields</div>
+{Object.entries(editedFields).map(([k,v])=>(
+<div key={k} style={{marginBottom:10}}>
+<label style={{fontSize:11,color:"#8A7A6A",fontFamily:"'Courier New',monospace",display:"block",marginBottom:3}}>{k}</label>
+<textarea value={v||""} onChange={e=>setEditedFields(p=>({...p,[k]:e.target.value}))} style={{...IS,minHeight:52,resize:"vertical"}}/>
+</div>
+))}
+</div>
+<div style={{marginBottom:18}}><label style={LS}>Tags (comma-separated)</label>
+<input value={(extracted.tags||[]).join(", ")} onChange={e=>setExtracted(p=>({...p,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)}))} style={IS} placeholder="tag1, tag2"/>
+</div>
+<div style={{display:"flex",gap:10,justifyContent:"flex-end",flexWrap:"wrap"}}>
+<button onClick={()=>{setStatus("idle");setExtracted(null);setParsed(null);setRaw("");}}
+style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Start Over</button>
+<button onClick={handleSave} style={{...BTN({background:"#2C2218",color:"#F5F0E8"})}}>Save to Archive</button>
+</div>
+</>}
+</div>
+</div>
+);
+}
+
+// ── Manual Modal ──────────────────────────────────────────────────────────────
+function ManualModal({onClose,onSave}){
+const [cat,setCat]=useState("characters");
+const [title,setTitle]=useState("");
+const [summary,setSummary]=useState("");
+const [tags,setTags]=useState("");
+const [fields,setFields]=useState({});
+const fds=CAT_FIELDS[cat]||[];
+const save=()=>{
+if(!title.trim())return;
+onSave({id:Date.now().toString(),category:cat,title:title.trim(),summary:summary.trim(),fields,tags:tags.split(",").map(t=>t.trim()).filter(Boolean),createdAt:new Date().toISOString()});
+onClose();
+};
+return(
+<div style={{position:"fixed",inset:0,background:"rgba(20,14,8,0.6)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+<div style={{background:"#FDFCFA",width:"min(640px,100%)",maxHeight:"88vh",overflowY:"auto",borderRadius:4,padding:"32px 28px",boxShadow:"0 8px 40px rgba(0,0,0,0.2)",border:"1px solid #E0D8CE"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+<h2 style={{margin:0,fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:22,color:"#1E140A"}}>New Entry</h2>
+<button onClick={onClose} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#A09080"}}>✕</button>
+</div>
+<div style={{marginBottom:14}}><label style={LS}>Category</label>
+<select value={cat} onChange={e=>{setCat(e.target.value);setFields({});}} style={{...IS,width:"auto"}}>
+{CATS.map(c=><option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+</select>
+</div>
+<div style={{marginBottom:14}}><label style={LS}>Title *</label><input value={title} onChange={e=>setTitle(e.target.value)} style={IS}/></div>
+<div style={{marginBottom:14}}><label style={LS}>Summary</label><textarea value={summary} onChange={e=>setSummary(e.target.value)} style={{...IS,minHeight:70,resize:"vertical"}}/></div>
+<div style={{borderTop:"1px solid #E8E2DA",paddingTop:14,marginBottom:14}}>
+<div style={{...LS,marginBottom:10}}>Fields</div>
+{fds.map(f=>(
+<div key={f} style={{marginBottom:10}}>
+<label style={{fontSize:11,color:"#8A7A6A",fontFamily:"'Courier New',monospace",display:"block",marginBottom:3}}>{f}</label>
+<textarea value={fields[f]||""} onChange={e=>setFields(p=>({...p,[f]:e.target.value}))} style={{...IS,minHeight:52,resize:"vertical"}}/>
+</div>
+))}
+</div>
+<div style={{marginBottom:18}}><label style={LS}>Tags (comma-separated)</label><input value={tags} onChange={e=>setTags(e.target.value)} style={IS} placeholder="e.g. protagonist, magic-user"/></div>
+<div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+<button onClick={onClose} style={{...BTN({border:"1px solid #D8D0C8",background:"none",color:"#6A5A4A"})}}>Cancel</button>
+<button onClick={save} disabled={!title.trim()} style={{...BTN({background:title.trim()?"#2C2218":"#C8C0B8",color:"#F5F0E8",cursor:title.trim()?"pointer":"not-allowed"})}}>Save to Archive</button>
+</div>
+</div>
+</div>
+);
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App(){
+const [apiKey,setApiKey]=useState(()=>store.get("clarion_groq_key")||"");
+const [entries,setEntries]=useState(()=>store.get("clarion_entries")||[]);
+const [activeCat,setActiveCat]=useState("all");
+const [search,setSearch]=useState("");
+const [modal,setModal]=useState(null);
+const [payload,setPayload]=useState(null);
+const [selected,setSelected]=useState(null);
+const fileRef=useRef();
+
+const saveKey=k=>{store.set("clarion_groq_key",k);setApiKey(k);};
+const saveEntry=e=>{const u=[e,...entries];setEntries(u);store.set("clarion_entries",u);};
+const deleteEntry=id=>{const u=entries.filter(e=>e.id!==id);setEntries(u);store.set("clarion_entries",u);setSelected(null);};
+
+const handleFile=async f=>{
+try{const p=await parseFile(f);setPayload({parsed:p,fileName:f.name});setModal("extract");}
+catch(e){alert(`Could not read "${f.name}":\n${e.message}`);}
+};
+
+if(!apiKey) return <SetupScreen onSave={saveKey}/>;
+
+const filtered=entries.filter(e=>{
+if(activeCat!=="all"&&e.category!==activeCat)return false;
+const q=search.toLowerCase();
+return !q||e.title.toLowerCase().includes(q)||e.summary?.toLowerCase().includes(q)||e.tags?.some(t=>t.toLowerCase().includes(q));
+});
+const counts={};
+CATS.forEach(c=>{counts[c.id]=entries.filter(e=>e.category===c.id).length;});
+
+return(
+<div style={{minHeight:"100vh",background:"#F5F0E8"}}>
+
+{/* Header */}
+<header style={{background:"#1E140A",padding:"0 20px",position:"sticky",top:0,zIndex:50,borderBottom:"1px solid #3A2A1A"}}>
+<div style={{maxWidth:1100,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,flexWrap:"wrap",gap:8}}>
+<div style={{display:"flex",alignItems:"baseline",gap:10}}>
+<span style={{fontFamily:"'Palatino Linotype',Palatino,serif",fontSize:21,color:"#F0E8D8"}}>The Clarion</span>
+<span style={{fontSize:9,color:"#6A5A4A",fontFamily:"'Courier New',monospace",letterSpacing:"0.08em"}}>BELLS OF MEMORY · ARCHIVE</span>
+</div>
+<div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+<input ref={fileRef} type="file" style={{display:"none"}} accept={ALL_EXTS} onChange={e=>{if(e.target.files[0])handleFile(e.target.files[0]);e.target.value="";}}/>
+<button onClick={()=>fileRef.current.click()} style={{padding:"5px 12px",background:"none",border:"1px solid #5A4A3A",borderRadius:2,color:"#C8B89A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10}}>↑ Upload</button>
+<button onClick={()=>{setPayload(null);setModal("extract");}} style={{padding:"5px 12px",background:"none",border:"1px solid #5A4A3A",borderRadius:2,color:"#C8B89A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10}}>✦ Extract</button>
+<button onClick={()=>setModal("manual")} style={{padding:"5px 12px",background:"#C8A87A",border:"none",borderRadius:2,color:"#1E140A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:10,fontWeight:700}}>+ New</button>
+<button onClick={()=>{if(window.confirm("Change API key?"))setApiKey("");}} style={{padding:"5px 10px",background:"none",border:"1px solid #3A2A1A",borderRadius:2,color:"#6A5A4A",cursor:"pointer",fontFamily:"'Courier New',monospace",fontSize:9}} title="Change API key">⚙</button>
+</div>
+</div>
+</header>
+
+<div style={{maxWidth:1100,margin:"0 auto",display:"flex",minHeight:"calc(100vh - 56px)"}}>
+
+{/* Sidebar */}
+<aside style={{width:190,flexShrink:0,padding:"20px 0",borderRight:"1px solid #E0D8CE"}}>
+<div style={{padding:"0 14px 8px",fontSize:9,textTransform:"uppercase",letterSpacing:"0.12em",color:"#A09080",fontFamily:"'Courier New',monospace"}}>Categories</div>
+{[{id:"all",label:"All Entries",icon:"",color:"#8B6F5E",count:entries.length},...CATS.map(c=>({...c,count:counts[c.id]||0}))].map(c=>(
+<div key={c.id} onClick={()=>setActiveCat(c.id)}
+style={{padding:"7px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:activeCat===c.id?"#EDE6DC":"none",borderRight:activeCat===c.id?`2px solid ${c.color}`:"2px solid transparent"}}>
+<span style={{fontSize:13,color:activeCat===c.id?"#2C2218":"#6B5E52",fontFamily:"Georgia,serif"}}>
+{c.icon&&<span style={{marginRight:5,color:c.color}}>{c.icon}</span>}{c.label}
+</span>
+<span style={{fontSize:10,color:"#A09080",fontFamily:"'Courier New',monospace"}}>{c.count}</span>
+</div>
+))}
+<div style={{padding:"16px 12px 0",marginTop:14,borderTop:"1px solid #E0D8CE"}}>
+<div style={{fontSize:9,textTransform:"uppercase",letterSpacing:"0.1em",color:"#A09080",fontFamily:"'Courier New',monospace",marginBottom:8}}>Quick Drop</div>
+<UploadZone onFile={handleFile} compact/>
+</div>
+</aside>
+
+{/* Main */}
+<main style={{flex:1,padding:"20px 24px"}}>
+<div style={{marginBottom:16,position:"relative"}}>
+<span style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)",color:"#A09080",fontSize:14}}>⌕</span>
+<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search the archive…"
+style={{width:"100%",padding:"9px 12px 9px 30px",border:"1px solid #D8D0C8",borderRadius:3,fontSize:13,fontFamily:"Georgia,serif",background:"#FDFCFA",color:"#2C2218",boxSizing:"border-box"}}/>
+</div>
+<div style={{fontSize:10,color:"#A09080",fontFamily:"'Courier New',monospace",letterSpacing:"0.06em",marginBottom:12}}>
+{filtered.length} {filtered.length===1?"ENTRY":"ENTRIES"}{activeCat!=="all"&&` · ${CATS.find(c=>c.id===activeCat)?.label.toUpperCase()}`}
+</div>
+{filtered.length===0&&(
+<div style={{textAlign:"center",padding:"56px 0"}}>
+<div style={{fontSize:34,marginBottom:12,color:"#C8B89A"}}>✦</div>
+<p style={{fontFamily:"'Palatino Linotype',serif",fontSize:17,color:"#7A6A5A"}}>{entries.length===0?"The Clarion awaits its first entry.":"No entries match your search."}</p>
+{entries.length===0&&<p style={{fontSize:13,color:"#A09080",fontStyle:"italic",marginTop:8}}>Upload a file, paste notes, or create an entry manually.</p>}
+</div>
+)}
+{filtered.map(e=><EntryCard key={e.id} entry={e} onClick={setSelected}/>)}
+</main>
+</div>
+
+{modal==="extract"&&<ExtractModal onClose={()=>{setModal(null);setPayload(null);}} onSave={saveEntry} apiKey={apiKey} initialParsed={payload?.parsed||null} sourceFileName={payload?.fileName||""}/>}
+{modal==="manual"&&<ManualModal onClose={()=>setModal(null)} onSave={saveEntry}/>}
+{selected&&<EntryDetail entry={selected} onClose={()=>setSelected(null)} onDelete={deleteEntry}/>}
+</div>
+);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
