@@ -367,6 +367,8 @@ function SetupScreen({onSave}){
 const [key,setKey]=useState("");
 const [err,setErr]=useState("");
 const [testing,setTesting]=useState(false);
+const [showHelp,setShowHelp]=useState(false);
+
 const test=async()=>{
 if(!key.trim()){setErr("Please paste your Groq API key first.");return;}
 setTesting(true);setErr("");
@@ -406,9 +408,10 @@ type="password" style={{...IS,marginBottom:12,fontFamily:"monospace"}}/>
 style={{...BTN({width:"100%",background:testing?"#C8C0B8":"#2C2218",color:"#F5F0E8",padding:"11px",fontSize:13})}}>
 {testing?"Testing connection…":"Connect & Enter The Clarion"}
 </button>
-<p style={{marginTop:14,fontSize:11,color:"#A09080",textAlign:"center",fontStyle:"italic"}}>
-Your key is saved locally in this browser. It never leaves your device.
-</p>
+<div style={{marginTop:14,padding:"10px 12px",background:"#E8F5E9",border:"1px solid #A8D5A8",borderRadius:2,fontSize:11,color:"#2E5C2E",fontFamily:"'Courier New',monospace",textAlign:"center"}}>
+✓ Your API key is automatically saved to your browser<br/>
+You won't need to enter it again after connecting.
+</div>
 </div>
 </div>
 );
