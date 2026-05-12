@@ -152,19 +152,21 @@ Categories: characters, locations, events, factions, lore, manuscripts, cosmolog
 
 async function extractGlossary(content,apiKey){
 const textContent=content.content||"";
-const messages=[{role:"user",content:`Extract all glossary terms and definitions from this document:\n\n${textContent.slice(0,16000)}`}];
-const allMessages=[{role:"system",content:GLOSSARY_SYS},...messages];
+const prompt=`You are an expert at extracting glossary entries. Extract each distinct glossary term and its definition as a separate entry. Return ONLY valid JSON:
+{"entries":[{"title":"Term","fields":{"Definition":"text"},"suggestedCategory":"lore","summary":"brief summary","tags":["glossary"]}]}
+Extract all terms from:\n\n${textContent.slice(0,14000)}`;
+const messages=[{role:"user",content:prompt}];
 const res=await fetch(GROQ_URL,{
 method:"POST",
 headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-body:JSON.stringify({model:GROQ_MODEL,messages:allMessages,temperature:0.1,max_tokens:3000}),
+body:JSON.stringify({model:GROQ_MODEL,messages,temperature:0.1,max_tokens:2500}),
 });
 const data=await res.json();
 if(data.error)throw new Error("Glossary extraction failed: "+(data.error.message||JSON.stringify(data.error)));
 const raw=(data.choices?.[0]?.message?.content||"").trim();
 const jsonStr=extractJSON(raw);
-if(!jsonStr)throw new Error("No valid JSON in glossary response");
-try{const result=JSON.parse(jsonStr);return result.entries||[];}catch(e){throw new Error("Invalid JSON in glossary: "+e.message);}
+if(!jsonStr)return[];
+try{const result=JSON.parse(jsonStr);return Array.isArray(result.entries)?result.entries:[];}catch(e){return[];}
 }
 
 async function extractWithGroq(content,apiKey){
